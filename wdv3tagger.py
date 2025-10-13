@@ -190,7 +190,7 @@ def has_existing_tags(et, image_path):
         return False
 
 # MAIN
-def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thresh=0.85, hide_rating_tags=True, character_tags_first=False, remove_separator=False, overwrite_tags=False, skip_if_tagged=False, output_to="Metadata"):
+def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thresh=0.85, hide_rating_tags=True, character_tags_first=False, remove_separator=False, overwrite_tags=False, skip_if_tagged=False, output_to="Metadata", sort_order="Newest First"):
     if not image_folder:
         return "Error: Please provide a directory.", "", ""
     os.makedirs(output_path, exist_ok=True)
@@ -261,28 +261,40 @@ def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thr
 
     # Yield image paths with validated file formats
     def get_image_paths(img_folder: str, recurse: bool) -> iter:
+        # Collect all file paths first
+        all_files = []
         
         if recurse:
             for root, _, files in os.walk(img_folder):
                 for file in files:
                     file_path = os.path.join(root, file)
                     if os.path.isfile(file_path):
-                        valid, msg, file_path = validate_file_format(file_path, output_to)
-                        if not valid:
-                            print(f"Skipping {file_path}: {msg}")
-                            skipped_files.append(os.path.basename(file_path))
-                            continue
-                        yield file_path
+                        all_files.append(file_path)
         else:
             for file in os.listdir(img_folder):
                 file_path = os.path.join(img_folder, file)
                 if os.path.isfile(file_path):   
-                    valid, msg, file_path = validate_file_format(file_path, output_to)
-                    if not valid:
-                        print(f"Skipping {file_path}: {msg}")
-                        skipped_files.append(os.path.basename(file_path))
-                        continue
-                    yield file_path
+                    all_files.append(file_path)
+        
+        # Sort files based on sort_order
+        if sort_order == "Newest First":
+            all_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        elif sort_order == "Oldest First":
+            all_files.sort(key=lambda x: os.path.getmtime(x), reverse=False)
+        elif sort_order == "Name (A-Z)":
+            all_files.sort(key=lambda x: os.path.basename(x).lower())
+        elif sort_order == "Name (Z-A)":
+            all_files.sort(key=lambda x: os.path.basename(x).lower(), reverse=True)
+        # If sort_order is "None", keep the default order (no sorting)
+        
+        # Validate and yield files
+        for file_path in all_files:
+            valid, msg, file_path = validate_file_format(file_path, output_to)
+            if not valid:
+                print(f"Skipping {file_path}: {msg}")
+                skipped_files.append(os.path.basename(file_path))
+                continue
+            yield file_path
 
     try:
         # Create a single ExifTool instance if we need metadata operations
@@ -359,7 +371,8 @@ iface = gr.Interface(
         gr.Checkbox(label="Remove separator", value=False),
         gr.Checkbox(label="Overwrite existing metadata tags", value=False),
         gr.Checkbox(label="Skip images that already have metadata tags", value=True, info="Ignored when 'Overwrite existing metadata tags' is enabled"),
-        gr.Radio(choices=["Text File", "Metadata"], value="Metadata", label="Output to")
+        gr.Radio(choices=["Text File", "Metadata"], value="Metadata", label="Output to"),
+        gr.Radio(choices=["Newest First", "Oldest First", "Name (A-Z)", "Name (Z-A)", "None"], value="Newest First", label="Sort files by", info="Sort order for processing files")
         
     ],
     outputs=[
