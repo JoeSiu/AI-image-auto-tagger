@@ -9,6 +9,9 @@ from PIL import Image
 import huggingface_hub
 from exiftool import ExifToolHelper
 
+# Global stop flag
+stop_requested = False
+
 #increase CSV limit for Flag report
 max_int = sys.maxsize
 while True:
@@ -189,8 +192,17 @@ def has_existing_tags(et, image_path):
         print(f"Warning: Could not read metadata from {image_path}: {str(e)}")
         return False
 
+# Function to stop the tagging process
+def stop_tagging():
+    global stop_requested
+    stop_requested = True
+    return "Stop requested. Processing will halt after current image..."
+
 # MAIN
 def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thresh=0.85, hide_rating_tags=True, character_tags_first=False, remove_separator=False, overwrite_tags=False, skip_if_tagged=False, output_to="Metadata", sort_order="Newest First"):
+    global stop_requested
+    stop_requested = False  # Reset stop flag at the start
+    
     if not image_folder:
         return "Error: Please provide a directory.", "", ""
     os.makedirs(output_path, exist_ok=True)
@@ -303,6 +315,12 @@ def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thr
         if need_exiftool:
             with ExifToolHelper(encoding="utf-8") as et:
                 for image_path in get_image_paths(image_folder, recursive):
+                    # Check if stop was requested
+                    if stop_requested:
+                        status_message = f"STOPPED -- Processed files: {len(processed_files)} -- Skipped files: {len(skipped_files)} -- See console for more details"
+                        print("\033[93mSTOPPED BY USER\033[0m")
+                        return status_message, "\n".join(processed_files), "\n".join(skipped_files)
+                    
                     try:
                         # Check if image already has tags and skip if option is enabled
                         # But if overwrite_tags is True, we force overwrite regardless of skip_if_tagged
@@ -331,6 +349,12 @@ def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thr
         else:
             # For text file output, no ExifTool needed
             for image_path in get_image_paths(image_folder, recursive):
+                # Check if stop was requested
+                if stop_requested:
+                    status_message = f"STOPPED -- Processed files: {len(processed_files)} -- Skipped files: {len(skipped_files)} -- See console for more details"
+                    print("\033[93mSTOPPED BY USER\033[0m")
+                    return status_message, "\n".join(processed_files), "\n".join(skipped_files)
+                
                 try:
                     with Image.open(image_path) as image:
                         processed_image = prepare_image(image, target_size)
@@ -359,30 +383,53 @@ def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thr
     print("\033[92mDONE\033[0m")
     return status_message, "\n".join(processed_files), "\n".join(skipped_files)
 
-iface = gr.Interface(
-    fn=tag_images,
-    inputs=[
-        gr.Textbox(label="Enter the path to the image directory"),
-        gr.Checkbox(label="Process subdirectories", value=False),
-        gr.Slider(minimum=0, maximum=1, step=0.01, value=0.35, label="General tags threshold"),
-        gr.Slider(minimum=0, maximum=1, step=0.01, value=0.85, label="Character tags threshold"),
-        gr.Checkbox(label="Hide rating tags", value=True),
-        gr.Checkbox(label="Character tags first"),
-        gr.Checkbox(label="Remove separator", value=False),
-        gr.Checkbox(label="Overwrite existing metadata tags", value=False),
-        gr.Checkbox(label="Skip images that already have metadata tags", value=True, info="Ignored when 'Overwrite existing metadata tags' is enabled"),
-        gr.Radio(choices=["Text File", "Metadata"], value="Metadata", label="Output to"),
-        gr.Radio(choices=["Newest First", "Oldest First", "Name (A-Z)", "Name (Z-A)", "None"], value="Newest First", label="Sort files by", info="Sort order for processing files")
+with gr.Blocks(title="Image Captioning and Tagging with SmilingWolf/wd-vit-tagger-v3") as iface:
+    gr.Markdown("# Image Captioning and Tagging with SmilingWolf/wd-vit-tagger-v3")
+    gr.Markdown("This tool tags all images in the specified directory and saves to .txt files inside 'captions' directory or embeds metadata directly into image files (supported formats: JPG/JPEG (recommended), PNG, GIF, WEBP, BMP(not metadata)). Check 'Remove separator' to replace '_' with spaces in tags. Check 'Skip images that already have metadata tags' to skip processing images that already have IPTC:Keywords or XMP:Subject tags (works only with Metadata output). Use Flag to generate a report which can be found in '.gradio' folder.")
+    
+    with gr.Row():
+        with gr.Column():
+            image_folder = gr.Textbox(label="Enter the path to the image directory")
+            recursive = gr.Checkbox(label="Process subdirectories", value=False)
+            general_thresh = gr.Slider(minimum=0, maximum=1, step=0.01, value=0.35, label="General tags threshold")
+            character_thresh = gr.Slider(minimum=0, maximum=1, step=0.01, value=0.85, label="Character tags threshold")
+            hide_rating_tags = gr.Checkbox(label="Hide rating tags", value=True)
+            character_tags_first = gr.Checkbox(label="Character tags first")
+            remove_separator = gr.Checkbox(label="Remove separator", value=False)
+            overwrite_tags = gr.Checkbox(label="Overwrite existing metadata tags", value=False)
+            skip_if_tagged = gr.Checkbox(label="Skip images that already have metadata tags", value=True, info="Ignored when 'Overwrite existing metadata tags' is enabled")
+            output_to = gr.Radio(choices=["Text File", "Metadata"], value="Metadata", label="Output to")
+            sort_order = gr.Radio(choices=["Newest First", "Oldest First", "Name (A-Z)", "Name (Z-A)", "None"], value="Newest First", label="Sort files by", info="Sort order for processing files")
+            
+            with gr.Row():
+                submit_btn = gr.Button("Start Tagging", variant="primary")
+                stop_btn = gr.Button("Stop", variant="stop", visible=False)
         
-    ],
-    outputs=[
-        gr.Textbox(label="Status"),
-        gr.Textbox(label="Processed Files"),
-        gr.Textbox(label="Skipped Files")
-    ],
-    title="Image Captioning and Tagging with SmilingWolf/wd-vit-tagger-v3",
-    description="This tool tags all images in the specified directory and saves to .txt files inside 'captions' directory or embeds metadata directly into image files (supported formats: JPG/JPEG (recommended), PNG, GIF, WEBP, BMP(not metadata)). Check 'Remove separator' to replace '_' with spaces in tags. Check 'Skip images that already have metadata tags' to skip processing images that already have IPTC:Keywords or XMP:Subject tags (works only with Metadata output). Use Flag to generate a report which can be found in '.gradio' folder."
-)
+        with gr.Column():
+            status_output = gr.Textbox(label="Status")
+            processed_output = gr.Textbox(label="Processed Files")
+            skipped_output = gr.Textbox(label="Skipped Files")
+    
+    def start_processing(*args):
+        # Show stop button, hide start button
+        yield gr.update(visible=False), gr.update(visible=True), "Processing started...", "", ""
+        # Run the actual tagging
+        result = tag_images(*args)
+        # Show start button, hide stop button
+        yield gr.update(visible=True), gr.update(visible=False), result[0], result[1], result[2]
+    
+    submit_btn.click(
+        fn=start_processing,
+        inputs=[image_folder, recursive, general_thresh, character_thresh, hide_rating_tags, 
+                character_tags_first, remove_separator, overwrite_tags, skip_if_tagged, output_to, sort_order],
+        outputs=[submit_btn, stop_btn, status_output, processed_output, skipped_output]
+    )
+    
+    stop_btn.click(
+        fn=stop_tagging,
+        inputs=[],
+        outputs=[status_output]
+    )
 
 if __name__ == "__main__":
     iface.launch(inbrowser=True)
