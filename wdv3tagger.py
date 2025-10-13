@@ -167,8 +167,30 @@ def validate_file_format(file_path: str, output_to) -> tuple:
 
     return (True, None, file_path)
 
+# Check if image already has metadata tags (using provided ExifTool instance)
+def has_existing_tags(et, image_path):
+    try:
+        existing = et.get_tags([image_path], ["IPTC:Keywords", "XMP:Subject"])[0]
+        
+        iptc_keywords = existing.get("IPTC:Keywords")
+        xmp_subject = existing.get("XMP:Subject")
+        
+        # Check if either field exists and has content
+        if iptc_keywords or xmp_subject:
+            # Normalize and check if there are actual tags
+            iptc_list = [str(t).strip() for t in (iptc_keywords if isinstance(iptc_keywords, list) else [iptc_keywords] if iptc_keywords else [])]
+            xmp_list = [str(t).strip() for t in (xmp_subject if isinstance(xmp_subject, list) else [xmp_subject] if xmp_subject else [])]
+            
+            if iptc_list or xmp_list:
+                return True
+        return False
+    except Exception as e:
+        # If we can't read metadata, assume no tags exist
+        print(f"Warning: Could not read metadata from {image_path}: {str(e)}")
+        return False
+
 # MAIN
-def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thresh=0.85, hide_rating_tags=True, character_tags_first=False, remove_separator=False, overwrite_tags=False, output_to="Metadata"):
+def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thresh=0.85, hide_rating_tags=True, character_tags_first=False, remove_separator=False, overwrite_tags=False, skip_if_tagged=False, output_to="Metadata"):
     if not image_folder:
         return "Error: Please provide a directory.", "", ""
     os.makedirs(output_path, exist_ok=True)
@@ -185,41 +207,40 @@ def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thr
             return [t.strip() for t in tags.split(",") if t.strip()]
         return []
 
-    def update_metadata(image_path, final_tags, overwrite_tags):
+    def update_metadata(et, image_path, final_tags, overwrite_tags):
         try:
-            with ExifToolHelper(encoding="utf-8") as et:
-                existing = et.get_tags([image_path], ["IPTC:Keywords", "XMP:Subject"])[0]
-                
-                iptc_list = normalize_tags(existing.get("IPTC:Keywords"))
-                xmp_list = normalize_tags(existing.get("XMP:Subject"))
+            existing = et.get_tags([image_path], ["IPTC:Keywords", "XMP:Subject"])[0]
+            
+            iptc_list = normalize_tags(existing.get("IPTC:Keywords"))
+            xmp_list = normalize_tags(existing.get("XMP:Subject"))
 
-                if not overwrite_tags:
-                    combined_tags = final_tags + iptc_list + xmp_list
-                else:
-                    combined_tags = final_tags
+            if not overwrite_tags:
+                combined_tags = final_tags + iptc_list + xmp_list
+            else:
+                combined_tags = final_tags
 
-                # Remove duplicates while preserving order
-                all_tags = list(dict.fromkeys(combined_tags))
+            # Remove duplicates while preserving order
+            all_tags = list(dict.fromkeys(combined_tags))
 
-                et.set_tags(
-                    [image_path],
-                    tags={
-                        "IPTC:Keywords": all_tags,
-                        "XMP:Subject": all_tags
-                    },
-                    params=["-P", "-overwrite_original"]
-                )
+            et.set_tags(
+                [image_path],
+                tags={
+                    "IPTC:Keywords": all_tags,
+                    "XMP:Subject": all_tags
+                },
+                params=["-P", "-overwrite_original"]
+            )
             print(f"Successfully added tags to {image_path}")
         except Exception as e:
             print(f"Error processing {image_path}: {str(e)}")
 
-    def process_image_file(image_path, image_folder, output_to, remove_separator, final_tags, overwrite_tags):
+    def process_image_file(et, image_path, image_folder, output_to, remove_separator, final_tags, overwrite_tags):
         relative_path = os.path.relpath(image_path, image_folder)
 
         if output_to == "Metadata":
             if remove_separator:
                 final_tags = [tag.replace("_", " ") for tag in final_tags]
-            update_metadata(image_path, final_tags, overwrite_tags)
+            update_metadata(et, image_path, final_tags, overwrite_tags)
         
         if output_to == "Text File":
             # Determine the caption file path
@@ -264,24 +285,58 @@ def tag_images(image_folder, recursive=False, general_thresh=0.35, character_thr
                     yield file_path
 
     try:
-        for image_path in get_image_paths(image_folder, recursive):
-            try:
-                with Image.open(image_path) as image:
-                    processed_image = prepare_image(image, target_size)
-                    preds = model.run(None, {model.get_inputs()[0].name: processed_image})[0]
+        # Create a single ExifTool instance if we need metadata operations
+        need_exiftool = output_to == "Metadata" or (skip_if_tagged and output_to == "Metadata")
+        
+        if need_exiftool:
+            with ExifToolHelper(encoding="utf-8") as et:
+                for image_path in get_image_paths(image_folder, recursive):
+                    try:
+                        # Check if image already has tags and skip if option is enabled
+                        # But if overwrite_tags is True, we force overwrite regardless of skip_if_tagged
+                        if skip_if_tagged and not overwrite_tags and output_to == "Metadata":
+                            if has_existing_tags(et, image_path):
+                                print(f"Skipping {os.path.basename(image_path)}: already has metadata tags")
+                                skipped_files.append(os.path.basename(image_path))
+                                continue
+                        
+                        with Image.open(image_path) as image:
+                            processed_image = prepare_image(image, target_size)
+                            preds = model.run(None, {model.get_inputs()[0].name: processed_image})[0]
 
-                final_tags = process_predictions_with_thresholds(
-                    preds, tag_data, character_thresh, general_thresh,
-                    hide_rating_tags, character_tags_first
-                )
+                        final_tags = process_predictions_with_thresholds(
+                            preds, tag_data, character_thresh, general_thresh,
+                            hide_rating_tags, character_tags_first
+                        )
 
-                process_image_file(image_path, image_folder, output_to, remove_separator, final_tags, overwrite_tags)
+                        process_image_file(et, image_path, image_folder, output_to, remove_separator, final_tags, overwrite_tags)
 
-                if os.path.basename(image_path) not in skipped_files:
-                    processed_files.append(os.path.basename(image_path))
-            except Exception as e:
-                print(f"Error processing {image_path}: {str(e)}")
-                skipped_files.append(os.path.basename(image_path))
+                        if os.path.basename(image_path) not in skipped_files:
+                            processed_files.append(os.path.basename(image_path))
+                    except Exception as e:
+                        print(f"Error processing {image_path}: {str(e)}")
+                        skipped_files.append(os.path.basename(image_path))
+        else:
+            # For text file output, no ExifTool needed
+            for image_path in get_image_paths(image_folder, recursive):
+                try:
+                    with Image.open(image_path) as image:
+                        processed_image = prepare_image(image, target_size)
+                        preds = model.run(None, {model.get_inputs()[0].name: processed_image})[0]
+
+                    final_tags = process_predictions_with_thresholds(
+                        preds, tag_data, character_thresh, general_thresh,
+                        hide_rating_tags, character_tags_first
+                    )
+
+                    # For text file output, pass None as et parameter
+                    process_image_file(None, image_path, image_folder, output_to, remove_separator, final_tags, overwrite_tags)
+
+                    if os.path.basename(image_path) not in skipped_files:
+                        processed_files.append(os.path.basename(image_path))
+                except Exception as e:
+                    print(f"Error processing {image_path}: {str(e)}")
+                    skipped_files.append(os.path.basename(image_path))
     except FileNotFoundError:
         error_message = f"Error: The specified directory does not exist."
         print(error_message)
@@ -303,6 +358,7 @@ iface = gr.Interface(
         gr.Checkbox(label="Character tags first"),
         gr.Checkbox(label="Remove separator", value=False),
         gr.Checkbox(label="Overwrite existing metadata tags", value=False),
+        gr.Checkbox(label="Skip images that already have metadata tags", value=True, info="Ignored when 'Overwrite existing metadata tags' is enabled"),
         gr.Radio(choices=["Text File", "Metadata"], value="Metadata", label="Output to")
         
     ],
@@ -312,7 +368,7 @@ iface = gr.Interface(
         gr.Textbox(label="Skipped Files")
     ],
     title="Image Captioning and Tagging with SmilingWolf/wd-vit-tagger-v3",
-    description="This tool tags all images in the specified directory and saves to .txt files inside 'captions' directory or embeds metadata directly into image files (supported formats: JPG/JPEG (recommended), PNG, GIF, WEBP, BMP(not metadata)). Check 'Remove separator' to replace '_' with spaces in tags. Use Flag to generate a report which can be found in '.gradio' folder."
+    description="This tool tags all images in the specified directory and saves to .txt files inside 'captions' directory or embeds metadata directly into image files (supported formats: JPG/JPEG (recommended), PNG, GIF, WEBP, BMP(not metadata)). Check 'Remove separator' to replace '_' with spaces in tags. Check 'Skip images that already have metadata tags' to skip processing images that already have IPTC:Keywords or XMP:Subject tags (works only with Metadata output). Use Flag to generate a report which can be found in '.gradio' folder."
 )
 
 if __name__ == "__main__":
