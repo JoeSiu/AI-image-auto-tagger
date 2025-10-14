@@ -193,7 +193,7 @@ def has_existing_tags(et, image_path):
         return False
 
 # Function to stop the tagging process
-def stop_tagging():
+def stop_processing():
     global stop_requested
     stop_requested = True
     return "Stop requested. Processing will halt after current image..."
@@ -426,7 +426,7 @@ with gr.Blocks(title="Image Captioning and Tagging with SmilingWolf/wd-vit-tagge
     )
     
     stop_btn.click(
-        fn=stop_tagging,
+        fn=stop_processing,
         inputs=[],
         outputs=[status_output]
     )
