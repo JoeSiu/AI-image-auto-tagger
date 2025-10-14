@@ -5,6 +5,7 @@ import csv
 import sys
 import pandas as pd
 import onnxruntime as rt
+import argparse
 from PIL import Image
 import huggingface_hub
 from exiftool import ExifToolHelper
@@ -432,4 +433,17 @@ with gr.Blocks(title="Image Captioning and Tagging with SmilingWolf/wd-vit-tagge
     )
 
 if __name__ == "__main__":
-    iface.launch(inbrowser=True)
+    parser = argparse.ArgumentParser(description="Image Captioning and Tagging Tool")
+    parser.add_argument("--api", action="store_true", help="Run in API mode without opening browser")
+    parser.add_argument("--server-port", type=int, default=7860, help="Port to run the server on (default: 7860)")
+    parser.add_argument("--server-name", type=str, default="127.0.0.1", help="Server name/host (default: 127.0.0.1)")
+    parser.add_argument("--share", action="store_true", help="Create a public link")
+
+    args = parser.parse_args()
+
+    iface.launch(
+        server_name=args.server_name,
+        server_port=args.server_port,
+        share=args.share,
+        inbrowser=not args.api
+    )
