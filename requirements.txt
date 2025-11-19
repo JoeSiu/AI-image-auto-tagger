@@ -1,5 +1,4 @@
 pillow>=11.1.0
-onnxruntime>=1.21.0
 onnxruntime-gpu>=1.21.0
 gradio>=5.22.0
 pyexiftool>=0.5.6
